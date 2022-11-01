@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <omp.h>
+#include <chrono>
 
 //
 //This program is inspired by an article named "Best-Buddies Similarity for Robust Template Matching CVPR2015"
@@ -23,106 +24,115 @@
 //And the output of this source code on the challenging real-world dataset is amazingly precise, far beyond my previous expectation.
 //
 
-using namespace cv ;
-using namespace std ;
-
-int gamma_, pz, verbose ;
+int gamma_, verbose;
 
 //Gaussian lowpass filter
 float Gaussian[]{ 0.0277, 0.1110, 0.0277, 0.1110, 0.4452, 0.1110, 0.0277, 0.1110, 0.0277 };
 
 //convert the image's info into a matrix and store them as a 2-dim vector list.
-Mat Im2col(Mat src, int Mrows, int Mcols){ // input or template / pz / pz
+cv::Mat Im2col(cv::Mat src, int pz){ // input or template / pz / pz
+    int cols = ceil(src.rows / pz) * ceil(src.cols / pz); // 160 * 90 = 14400 or 7 * 15 = 105
+    cv::Mat ans(pz * pz, cols, CV_32FC3);
+    cv::Point2d ref;
+    std::cout << "(debug)cols of ans: " << cols << std::endl;
 
-    int col = 0;
-    int rows = Mrows * Mcols; // 9
-    int i, j, k, r ;
-    int cols = ceil(src.rows / Mrows) * ceil(src.cols / Mcols); // 160 * 90 = 14400 or 7 * 15 = 105
-    Mat ans(rows, cols, CV_32FC3) ;
-
-    for ( j = 0; j * pz < src.cols; j++){
-        for ( i = 0; i * pz < src.rows; i++){
-            for ( k = 0; k < Mcols; k++){
-                for ( r = 0; r < Mrows; r++){
-                    ans.at<Vec3f>(r + k*Mrows, col)[0] = src.at<Vec3f>(i * Mcols + k, j * Mrows + r)[0] ;
-                    ans.at<Vec3f>(r + k*Mrows, col)[1] = src.at<Vec3f>(i * Mcols + k, j * Mrows + r)[1] ;
-                    ans.at<Vec3f>(r + k*Mrows, col)[2] = src.at<Vec3f>(i * Mcols + k, j * Mrows + r)[2] ;
-                }
+    int col = 0; // col of ans
+    for (int j = 0; j < (src.cols - src.cols % pz); j += pz){
+        for (int i = 0; i < (src.rows - src.rows % pz); i += pz){
+            for (int k = 0; k < (pz * pz); k++){ // row of ans
+                ref.y = j + k / pz; ref.x = i + k % pz;
+                ans.at<cv::Vec3f>(k, col)[0] = src.at<cv::Vec3f>(ref.y, ref.x)[0];
+                ans.at<cv::Vec3f>(k, col)[1] = src.at<cv::Vec3f>(ref.y, ref.x)[1];
+                ans.at<cv::Vec3f>(k, col)[2] = src.at<cv::Vec3f>(ref.y, ref.x)[2];
             }
             col++;
         }
     }
+    std::cout << "(debug)col of for loop: " << col << std::endl;
+
     return ans;
 }
 
 //the main code
 int main(int argc, char *argv[]){
 
-    int mode ;
-    mode = 1 ;
-    string TName, IName, TxtName, resultName, output_name, logT, logI ;
-    Mat RESR, RESG, RESB ;
-    Mat RESR2, RESG2, RESB2 ;
-    verbose = 0 ;
+    int mode;
+    mode = 1;
+    std::string TName, IName, TxtName, resultName, output_name, logT, logI;
+    cv::Mat RESR, RESG, RESB;
+    cv::Mat RESR2, RESG2, RESB2;
+    verbose = 0;
+    int pz = 3;
 
     // Check Options
     for( int idx = 1; idx < argc; idx++ ){
-        if( !strcmp( argv[idx], "-gamma" )) gamma_ = atoi( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-pz" )) pz = atoi( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-tmp" )) TName = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-i" )) IName = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-txt" )) TxtName = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-res" )) resultName = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-log" )) output_name = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-logT" )) logT = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-logI" )) logI = string( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-v" )) verbose = atoi( argv[++idx] ) ;
-        else if( !strcmp( argv[idx], "-mode" )) mode = atoi( argv[++idx] ) ;
+        if( !strcmp( argv[idx], "-gamma" )) gamma_ = atoi( argv[++idx] );
+        else if( !strcmp( argv[idx], "-pz" )) pz = atoi( argv[++idx] );
+        else if( !strcmp( argv[idx], "-tmp" )) TName = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-i" )) IName = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-txt" )) TxtName = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-res" )) resultName = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-log" )) output_name = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-logT" )) logT = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-logI" )) logI = std::string( argv[++idx] );
+        else if( !strcmp( argv[idx], "-v" )) verbose = atoi( argv[++idx] );
+        else if( !strcmp( argv[idx], "-mode" )) mode = atoi( argv[++idx] );
     }
 
-    Mat Ts = imread(TName);
-    cout << TName << endl ;
+    /*===============================================================*/
+    cv::Mat Ts, Is; // Template image / Input image
+    cv::Mat T, I; // Template image / Input image <CV_8UC3 -> CV_32FC3>
+    cv::Mat TMat, IMat; // Template image / Input image (Divided into patches) <CV_32FC3>
+    std::vector<int> Tcut(4, 0); // [0]x of the top left / [1]y of the top left / [2]width / [3]height
+    /*===============================================================*/
 
-    Mat Is = imread(IName);
-    cout << IName << endl ;
+    std::cout << "Template image: " << TName << std::endl;
+    std::cout << "Input image: " << IName << std::endl;
+    std::cout << "Input text: " << TxtName << std::endl;
+    
+    Ts = cv::imread(TName);
+    if(Ts.empty()){
+        std::cerr << "Cannot load template image." << std::endl;
+        return -1;
+    }
+    Is = cv::imread(IName);
+    if(Is.empty()){
+        std::cerr << "Cannot load input image." << std::endl;
+        return -1;
+    }
 
-    vector<int> Tcut(4, 0) ;
-    ifstream input(TxtName);
-    if(mode == 1) input >> Tcut[0] >> Tcut[1] >> Tcut[2] >> Tcut[3] ;
+    std::ifstream input(TxtName);
+    if(mode == 1) input >> Tcut[0] >> Tcut[1] >> Tcut[2] >> Tcut[3];
     if(mode == 0){
-        string temp, temp2;
+        std::string temp, temp2;
         getline(input, temp);
-        istringstream ss(temp);
+        std::istringstream ss(temp);
         int i = 0;
         do{
-            ss >> Tcut[i++] ;
-        }while (getline(ss, temp2, ',')) ;
+            ss >> Tcut[i++];
+        }while (getline(ss, temp2, ','));
     }
-
-    cout << TxtName << endl ;
-    cout << Tcut[0] << " " << Tcut[1] << " " << Tcut[2] << " " << Tcut[3] << endl ;
+    std::cout << "Text: " << Tcut[0] << " " << Tcut[1] << " " << Tcut[2] << " " << Tcut[3] << std::endl;
 
     //clipping pictures
-    if ((Tcut[2] % pz) < (pz / 2)) Tcut[2] -= (Tcut[2] % pz) ;
-    else Tcut[2] += (pz - Tcut[2] % pz) ;
-    if ((Tcut[3] % pz) < (pz / 2)) Tcut[3] -= (Tcut[3] % pz) ;
-    else Tcut[3] += (pz - Tcut[3] % pz) ;
+    if ((Tcut[2] % pz) < (pz / 2)) Tcut[2] -= (Tcut[2] % pz); // cutoff
+    else Tcut[2] += (pz - Tcut[2] % pz);                      // round up
+    if ((Tcut[3] % pz) < (pz / 2)) Tcut[3] -= (Tcut[3] % pz); // cutoff
+    else Tcut[3] += (pz - Tcut[3] % pz);                      // round up
+    std::cout << "Text (After clipping):" << Tcut[0] << " " << Tcut[1] << " " << Tcut[2] << " " << Tcut[3] << std::endl;
 
-    cout << Tcut[0] << " " << Tcut[1] << " " << Tcut[2] << " " << Tcut[3] << endl ;
+    if(mode == 0) T = Ts(cv::Rect(Tcut[0], Tcut[1], Tcut[2], Tcut[3]));
+    if(mode == 1) T = Ts;
+    I = Is(cv::Rect(0, 0, (Is.cols - Is.cols % pz), (Is.rows - Is.rows % pz))); // cutoff (Input image size must be divisible by 3 as with template image)
 
-    Mat T ;
-    if(mode == 0) T = Ts(Rect(Tcut[0], Tcut[1], Tcut[2], Tcut[3]));
-    if(mode == 1) T = Ts ;
-    Mat I = Is(Rect(0, 0, (Is.cols - Is.cols % pz), (Is.rows - Is.rows % pz)));
+    //cv::imwrite(logI, I);
+    //cv::imwrite(logT, T);
 
-    //imwrite(logI, I) ;
-    //imwrite(logT, T) ;
+    // Normalize the image from 0 to 1.
+    T.convertTo(T, CV_32FC3, 1.0 / 255.0);  I.convertTo(I, CV_32FC3, 1.0 / 255.0);
 
-    T.convertTo(T, CV_32FC3, 1.0 / 255.0);
-    I.convertTo(I, CV_32FC3, 1.0 / 255.0);
-
-    Mat TMat = Im2col(T, pz, pz);
-    Mat IMat = Im2col(I, pz, pz);
+    // Divided into patches
+    TMat = Im2col(T, pz);   IMat = Im2col(I, pz);
 
     int N = TMat.cols; // 105
     int rowT = T.rows; // 45
@@ -131,7 +141,7 @@ int main(int argc, char *argv[]){
     int colI = I.cols; // 480
 
     //pre compute spatial distance component
-    vector<vector<float>> Dxy, Drgb, Drgb_prev, D, D_r, BBS;
+    std::vector<std::vector<float>> Dxy, Drgb, Drgb_prev, D, D_r, BBS;
     Dxy.resize(N);
     Drgb_prev.resize(N);
     Drgb.resize(N);
@@ -150,16 +160,16 @@ int main(int argc, char *argv[]){
     for (int i = 0; i < static_cast<int>(BBS.size()); i++) BBS[i].resize(colI);
 
     //Drgb's buffer
-    vector<vector<vector<float>>> Drgb_buffer;
+    std::vector<std::vector<std::vector<float>>> Drgb_buffer;
     Drgb_buffer.resize(N);
-    int bufSize = rowI - rowT ; // 270 - 45 = 225
+    int bufSize = rowI - rowT; // 270 - 45 = 225
 
     for (int i = 0; i < static_cast<int>(Drgb_buffer.size()); i++){
-        Drgb_buffer[i].resize(N) ;
-        for (int j = 0; j < static_cast<int>(Drgb_buffer[i].size()); j++) Drgb_buffer[i][j].resize(bufSize) ;
+        Drgb_buffer[i].resize(N);
+        for (int j = 0; j < static_cast<int>(Drgb_buffer[i].size()); j++) Drgb_buffer[i][j].resize(bufSize);
     }
 
-    vector<float> xx, yy;
+    std::vector<float> xx, yy;
     for (int i = 0; (pz * i) < colT; i++){
         float n = pz * i * 3.0039;
         for (int j = 0; (pz * j) < rowT; j++){
@@ -175,30 +185,30 @@ int main(int argc, char *argv[]){
         }
     }
 
-    vector<vector<int>> IndMat;
+    std::vector<std::vector<int>> IndMat;
     IndMat.resize(I.rows / pz); // 90
-    for (int i = 0; i < static_cast<int>(IndMat.size()); i++) IndMat[i].resize(I.cols / pz) ; // 160
+    for (int i = 0; i < static_cast<int>(IndMat.size()); i++) IndMat[i].resize(I.cols / pz); // 160
 
     int n = 0;
     for (int j = 0; j < (I.cols / pz); j++){
         for (int i = 0; i < (I.rows / pz); i++){
-            IndMat[i][j] = n++ ; // Nmax is 14399
+            IndMat[i][j] = n++; // Nmax is 14399
         }
     }
 
     // loop over image pixels
-    cout << "log : " << colI << " " << rowI << endl ;
-    cout << "log : " << colT << " " << rowT << endl ;
+    std::cout << "log : " << colI << " " << rowI << std::endl;
+    std::cout << "log : " << colT << " " << rowT << std::endl;
 
-    std::chrono::system_clock::time_point start1, end1 ;
-    start1 = std::chrono::system_clock::now() ;
+    std::chrono::system_clock::time_point start1, end1;
+    start1 = std::chrono::system_clock::now();
 
     //#pragma omp parallel for
     for (int coli = 0; coli < (colI / pz - colT / pz + 1); coli++){ // 154
         for (int rowi = 0; rowi < (rowI / pz - rowT / pz + 1); rowi++){ // 76
-            Mat PMat(9, N, CV_32FC3);
-            vector<int> v;
-            vector<float> w;
+            cv::Mat PMat(9, N, CV_32FC3);
+            std::vector<int> v;
+            std::vector<float> w;
             for (int j = coli; j < (coli + colT / pz); j++)
             {
                 for (int i = rowi; i < (rowi + rowT / pz); i++)
@@ -211,9 +221,9 @@ int main(int argc, char *argv[]){
             {
                 for (int jx = 0; jx < 9; jx++)
                 {
-                    PMat.at<Vec3f>(jx, ix)[0] = IMat.at<Vec3f>(jx, v[ptv])[0];
-                    PMat.at<Vec3f>(jx, ix)[1] = IMat.at<Vec3f>(jx, v[ptv])[1];
-                    PMat.at<Vec3f>(jx, ix)[2] = IMat.at<Vec3f>(jx, v[ptv])[2];
+                    PMat.at<cv::Vec3f>(jx, ix)[0] = IMat.at<cv::Vec3f>(jx, v[ptv])[0];
+                    PMat.at<cv::Vec3f>(jx, ix)[1] = IMat.at<cv::Vec3f>(jx, v[ptv])[1];
+                    PMat.at<cv::Vec3f>(jx, ix)[2] = IMat.at<cv::Vec3f>(jx, v[ptv])[2];
                 }
                 ptv++;
             }
@@ -221,14 +231,14 @@ int main(int argc, char *argv[]){
             //compute distance matrix
             for (int idxP = 0; idxP < N; idxP++)
             {
-                Mat Temp(9, N, CV_32FC3);
+                cv::Mat Temp(9, N, CV_32FC3);
                 for (int i = 0; i < Temp.cols; i++)
                 {
                     for (int j = 0; j < Temp.rows; j++)
                     {
-                        Temp.at<Vec3f>(j, i)[0] = pow(((-TMat.at<Vec3f>(j, i)[0] + PMat.at<Vec3f>(j, idxP)[0])*Gaussian[j]), 2);
-                        Temp.at<Vec3f>(j, i)[1] = pow(((-TMat.at<Vec3f>(j, i)[1] + PMat.at<Vec3f>(j, idxP)[1])*Gaussian[j]), 2);
-                        Temp.at<Vec3f>(j, i)[2] = pow(((-TMat.at<Vec3f>(j, i)[2] + PMat.at<Vec3f>(j, idxP)[2])*Gaussian[j]), 2);
+                        Temp.at<cv::Vec3f>(j, i)[0] = pow(((-TMat.at<cv::Vec3f>(j, i)[0] + PMat.at<cv::Vec3f>(j, idxP)[0])*Gaussian[j]), 2);
+                        Temp.at<cv::Vec3f>(j, i)[1] = pow(((-TMat.at<cv::Vec3f>(j, i)[1] + PMat.at<cv::Vec3f>(j, idxP)[1])*Gaussian[j]), 2);
+                        Temp.at<cv::Vec3f>(j, i)[2] = pow(((-TMat.at<cv::Vec3f>(j, i)[2] + PMat.at<cv::Vec3f>(j, idxP)[2])*Gaussian[j]), 2);
                     }
                 }
                 for (int jx = 0; jx < N; jx++)
@@ -237,9 +247,9 @@ int main(int argc, char *argv[]){
                     for (int ix = 0; ix < 9; ix++)
                     {
                         if (D[ix][jx] < 1e-4) D[ix][jx] = 0;
-                        res += Temp.at<Vec3f>(ix, idxP)[0];
-                        res += Temp.at<Vec3f>(ix, idxP)[1];
-                        res += Temp.at<Vec3f>(ix, idxP)[2];
+                        res += Temp.at<cv::Vec3f>(ix, idxP)[0];
+                        res += Temp.at<cv::Vec3f>(ix, idxP)[1];
+                        res += Temp.at<cv::Vec3f>(ix, idxP)[2];
                     }
                     Drgb[jx][idxP] = res;
                 }
@@ -258,8 +268,8 @@ int main(int argc, char *argv[]){
             }
 
             //compute the BBS value of this point
-            vector<float> minVal1, minVal2;
-            vector<int> idx1, idx2, ii1, ii2;
+            std::vector<float> minVal1, minVal2;
+            std::vector<int> idx1, idx2, ii1, ii2;
 
             for (int ix = 0; ix < N; ix++)
             {
@@ -277,7 +287,7 @@ int main(int argc, char *argv[]){
                 ii2.push_back((ix * N) + idx2[ix]);
             }
 
-            vector<vector<int>> IDX_MAT1, IDX_MAT2;
+            std::vector<std::vector<int>> IDX_MAT1, IDX_MAT2;
             IDX_MAT1.resize(N);
             IDX_MAT2.resize(N);
             for (int i = 0; i < N; i++)
@@ -285,8 +295,8 @@ int main(int argc, char *argv[]){
                 IDX_MAT1[i].resize(N);
                 IDX_MAT2[i].resize(N);
             }
-            int sum, sum2, pt1, pt2 ;
-            sum = sum2 = pt1 = pt2 = 0 ;
+            int sum, sum2, pt1, pt2;
+            sum = sum2 = pt1 = pt2 = 0;
             for (int ix = 0; ix < N; ix++)
             {
                 for (int jx = 0; jx < N; jx++)
@@ -308,141 +318,141 @@ int main(int argc, char *argv[]){
                 }
             }	
             BBS[rowi][coli] = sum;
-            //cout << coli << " " << rowi << endl ;
+            //cout << coli << " " << rowi << endl;
         }
     }
 
-    end1 = std::chrono::system_clock::now() ;
-    const double time = std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1).count() *0.001 ;
-    cout << "time " << time << " [msec]" << endl ;
+    end1 = std::chrono::system_clock::now();
+    const double time = std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1).count() *0.001;
+    std::cout << "time " << time << " [msec]" << std::endl;
 
-    float max = BBS[0][0] ;
-    int markRow, markCol ;
-    markCol = markRow = 0 ;
+    float max = BBS[0][0];
+    int markRow, markCol;
+    markCol = markRow = 0;
 
     // search max score
     for (int i = 0; i < rowI; i++){
         for (int j = 0; j < colI; j++){
             if (BBS[i][j] >= max){
                 max = BBS[i][j];
-                markRow = i ;
-                markCol = j ;
+                markRow = i;
+                markCol = j;
             }
         }
     }
 
     if(verbose){
         //Initialize the output iamge and .txt files
-        cout << output_name << endl ;
+        std::cout << output_name << std::endl;
 
-        ofstream output(output_name);
-        output << markRow * pz << " " << markCol * pz << endl ;
+        std::ofstream output(output_name);
+        output << markRow * pz << " " << markCol * pz << std::endl;
         output.close();
     }
 
-    Mat OUTPUT1, OUTPUT2, OUTPUT3 ;
-    Mat Is2, Ts2 ;
-    if(mode == 1) Is2 = imread(IName, 1) ;
+    cv::Mat OUTPUT1, OUTPUT2, OUTPUT3;
+    cv::Mat Is2, Ts2;
+    if(mode == 1) Is2 = cv::imread(IName, 1);
     if(mode == 0){
-        Ts2 = imread(TName, 1) ;
-        Is2 = imread(IName, 1) ;
+        Ts2 = cv::imread(TName, 1);
+        Is2 = cv::imread(IName, 1);
     }
-    RESR = cv::Mat_<uchar>(rowI, colI) ;
-    RESG = cv::Mat_<uchar>(rowI, colI) ;
-    RESB = cv::Mat_<uchar>(rowI, colI) ;
-    RESR2 = cv::Mat_<uchar>(rowI, colI) ;
-    RESG2 = cv::Mat_<uchar>(rowI, colI) ;
-    RESB2 = cv::Mat_<uchar>(rowI, colI) ;
+    RESR = cv::Mat_<uchar>(rowI, colI);
+    RESG = cv::Mat_<uchar>(rowI, colI);
+    RESB = cv::Mat_<uchar>(rowI, colI);
+    RESR2 = cv::Mat_<uchar>(rowI, colI);
+    RESG2 = cv::Mat_<uchar>(rowI, colI);
+    RESB2 = cv::Mat_<uchar>(rowI, colI);
 
-    for( int j = 0 ; j < rowI ; j++ ) {
-        for( int i = 0 ; i < colI ; i++ ) {
+    for( int j = 0; j < rowI; j++ ) {
+        for( int i = 0; i < colI; i++ ) {
             if(mode == 0){
-                RESR.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2] ;
-                RESG.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1] ;
-                RESB.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0] ;
-                RESR2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[2] ;
-                RESG2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[1] ;
-                RESB2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[0] ;
+                RESR.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2];
+                RESG.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1];
+                RESB.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0];
+                RESR2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[2];
+                RESG2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[1];
+                RESB2.at<uchar>(j,i) = Ts2.at<cv::Vec3b>(j,i)[0];
             }else{
-                RESR.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2] ;
-                RESG.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1] ;
-                RESB.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0] ;
-                RESR2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2] ;
-                RESG2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1] ;
-                RESB2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0] ;
+                RESR.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2];
+                RESG.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1];
+                RESB.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0];
+                RESR2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[2];
+                RESG2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[1];
+                RESB2.at<uchar>(j,i) = Is2.at<cv::Vec3b>(j,i)[0];
             }
         }
     }
 
     //mark rectangle
-    int si, sj, ei, ej ;
-    si  = markCol * pz ;
-    sj  = markRow * pz ;
-    ei  = si + colT ;
-    ej  = sj + rowT ;
+    int si, sj, ei, ej;
+    si  = markCol * pz;
+    sj  = markRow * pz;
+    ei  = si + colT;
+    ej  = sj + rowT;
 
     //Rect-Yellow
-    cv::rectangle(RESR,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(0), 1) ;
-    cv::rectangle(RESR,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(0), 1) ;
+    cv::rectangle(RESR,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1);
+    cv::rectangle(RESG,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1);
+    cv::rectangle(RESB,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(0), 1);
+    cv::rectangle(RESR,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1);
+    cv::rectangle(RESG,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1);
+    cv::rectangle(RESB,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(0), 1);
 
     //Rect-Blue
-    cv::rectangle(RESR,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(50), 1) ;
-    cv::rectangle(RESG,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1) ;
+    cv::rectangle(RESR,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(50), 1);
+    cv::rectangle(RESG,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(255), 1);
+    cv::rectangle(RESB,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1);
     
     //Rect-Yellow
-    cv::rectangle(RESR,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(0), 1) ;
-    cv::rectangle(RESR,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(0), 1) ;
+    cv::rectangle(RESR,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1);
+    cv::rectangle(RESG,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1);
+    cv::rectangle(RESB,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(0), 1);
+    cv::rectangle(RESR,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1);
+    cv::rectangle(RESG,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1);
+    cv::rectangle(RESB,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(0), 1);
 
-    vector<Mat> color_img1;
+    std::vector<cv::Mat> color_img1;
     color_img1.push_back(RESB);
     color_img1.push_back(RESG);
     color_img1.push_back(RESR);
     merge(color_img1, OUTPUT1);
 
-    si  = Tcut[0] ;
-    sj  = Tcut[1] ;
-    ei  = Tcut[0] + Tcut[2] ;
-    ej  = Tcut[1] + Tcut[3] ;
+    si  = Tcut[0];
+    sj  = Tcut[1];
+    ei  = Tcut[0] + Tcut[2];
+    ej  = Tcut[1] + Tcut[3];
 
     //Rect-Yellow
-    cv::rectangle(RESR2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(0), 1) ;
-    cv::rectangle(RESR2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(0), 1) ;
+    cv::rectangle(RESR2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1);
+    cv::rectangle(RESG2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(255), 1);
+    cv::rectangle(RESB2,cv::Point(si - 1, sj - 1),cv::Point(ei + 1, ej + 1),cv::Scalar(0), 1);
+    cv::rectangle(RESR2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1);
+    cv::rectangle(RESG2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(255), 1);
+    cv::rectangle(RESB2,cv::Point(si - 2, sj - 2),cv::Point(ei + 2, ej + 2),cv::Scalar(0), 1);
 
     //Rect-Red
-    cv::rectangle(RESR2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1) ;
-    cv::rectangle(RESG2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1) ;
-    cv::rectangle(RESB2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(255), 1) ;
+    cv::rectangle(RESR2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1);
+    cv::rectangle(RESG2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(0), 1);
+    cv::rectangle(RESB2,cv::Point(si, sj),cv::Point(ei, ej),cv::Scalar(255), 1);
     
     //Rect-Yellow
-    cv::rectangle(RESR2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(0), 1) ;
-    cv::rectangle(RESR2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESG2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1) ;
-    cv::rectangle(RESB2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(0), 1) ;
+    cv::rectangle(RESR2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1);
+    cv::rectangle(RESG2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(255), 1);
+    cv::rectangle(RESB2,cv::Point(si + 1, sj + 1),cv::Point(ei - 1, ej - 1),cv::Scalar(0), 1);
+    cv::rectangle(RESR2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1);
+    cv::rectangle(RESG2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(255), 1);
+    cv::rectangle(RESB2,cv::Point(si + 2, sj + 2),cv::Point(ei - 2, ej - 2),cv::Scalar(0), 1);
 
-    vector<Mat> color_img2 ;
+    std::vector<cv::Mat> color_img2;
     color_img2.push_back(RESB2);
     color_img2.push_back(RESG2);
     color_img2.push_back(RESR2);
     merge(color_img2, OUTPUT2);
 
     hconcat(OUTPUT1, OUTPUT2, OUTPUT3);
-    cout << resultName << endl << endl ;
+    std::cout << resultName << std::endl << std::endl;
     imwrite(resultName, OUTPUT3);
 
-    return 0 ;
+    return 0;
 }
