@@ -1,6 +1,4 @@
-# BBS
-
-# Best-Buddies Similarity for Robust Template Matching
+# BBS (Best-Buddies Similarity for Robust Template Matching)
 
 Paper https://openaccess.thecvf.com/content_cvpr_2015/html/Dekel_Best-Buddies_Similarity_for_2015_CVPR_paper.html
 
