@@ -9,8 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <omp.h>
+//#include <omp.h>
 #include <chrono>
+#include "cxx-prettyprint/prettyprint.hpp" // for debug
 
 //
 //This program is inspired by an article named "Best-Buddies Similarity for Robust Template Matching CVPR2015"
@@ -31,14 +32,14 @@ float Gaussian[]{ 0.0277, 0.1110, 0.0277, 0.1110, 0.4452, 0.1110, 0.0277, 0.1110
 
 //convert the image's info into a matrix and store them as a 2-dim vector list.
 cv::Mat Im2col(cv::Mat src, int pz){ // input or template / pz / pz
-    int cols = ceil(src.rows / pz) * ceil(src.cols / pz); // 160 * 90 = 14400 or 7 * 15 = 105
+    int cols = ceil(src.rows / pz) * ceil(src.cols / pz); // 160 * 90 = 14400 or 15 * 7 = 105
     cv::Mat ans(pz * pz, cols, CV_32FC3);
     cv::Point2d ref;
     std::cout << "(debug)cols of ans: " << cols << std::endl;
 
     int col = 0; // col of ans
-    for (int j = 0; j < (src.cols - src.cols % pz); j += pz){
-        for (int i = 0; i < (src.rows - src.rows % pz); i += pz){
+    for (int j = 0; j < (src.rows - src.rows % pz); j += pz){
+        for (int i = 0; i < (src.cols - src.cols % pz); i += pz){
             for (int k = 0; k < (pz * pz); k++){ // row of ans
                 ref.y = j + k / pz; ref.x = i + k % pz;
                 ans.at<cv::Vec3f>(k, col)[0] = src.at<cv::Vec3f>(ref.y, ref.x)[0];
@@ -86,9 +87,11 @@ int main(int argc, char *argv[]){
     std::vector<int> Tcut(4, 0); // [0]x of the top left / [1]y of the top left / [2]width / [3]height
     /*===============================================================*/
 
+    std::cout << "#############################################" << std::endl;
     std::cout << "Template image: " << TName << std::endl;
     std::cout << "Input image: " << IName << std::endl;
     std::cout << "Input text: " << TxtName << std::endl;
+    std::cout << "#############################################" << std::endl;
     
     Ts = cv::imread(TName);
     if(Ts.empty()){
@@ -131,6 +134,10 @@ int main(int argc, char *argv[]){
     // Normalize the image from 0 to 1.
     T.convertTo(T, CV_32FC3, 1.0 / 255.0);  I.convertTo(I, CV_32FC3, 1.0 / 255.0);
 
+    // loop over image pixels
+    std::cout << "Size of T: (" << T.rows << " x " << T.cols << ")" << std::endl;
+    std::cout << "Size of I: (" << I.rows << " x " << I.cols << ")" << std::endl;
+    
     // Divided into patches
     TMat = Im2col(T, pz);   IMat = Im2col(I, pz);
 
@@ -140,54 +147,48 @@ int main(int argc, char *argv[]){
     int rowI = I.rows; // 270
     int colI = I.cols; // 480
 
+
     //pre compute spatial distance component
-    std::vector<std::vector<float>> Dxy, Drgb, Drgb_prev, D, D_r, BBS;
-    Dxy.resize(N);
-    Drgb_prev.resize(N);
-    Drgb.resize(N);
-    D.resize(N);
-    D_r.resize(N);
-
-    for (int i = 0; i < N; i++){
-        Dxy[i].resize(N);
-        Drgb[i].resize(N);
-        Drgb_prev[i].resize(N);
-        D[i].resize(N);
-        D_r[i].resize(N);
-    }
-
-    BBS.resize(rowI);
-    for (int i = 0; i < static_cast<int>(BBS.size()); i++) BBS[i].resize(colI);
+    std::vector<std::vector<float>> Dxy(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> Dxy2(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> Drgb(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> Drgb_prev(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> D(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> D_r(TMat.cols, std::vector<float>(TMat.cols));
+    std::vector<std::vector<float>> BBS(I.rows, std::vector<float>(I.cols));
 
     //Drgb's buffer
-    std::vector<std::vector<std::vector<float>>> Drgb_buffer;
-    Drgb_buffer.resize(N);
-    int bufSize = rowI - rowT; // 270 - 45 = 225
-
-    for (int i = 0; i < static_cast<int>(Drgb_buffer.size()); i++){
+    int bufSize = I.rows - T.rows; // 270 - 45 = 225
+    std::vector<std::vector<std::vector<float>>> Drgb_buffer(TMat.cols, std::vector<std::vector<float>>(TMat.cols, std::vector<float>(bufSize)));
+    //Drgb_buffer.resize(N);
+    /*for (int i = 0; i < static_cast<int>(Drgb_buffer.size()); i++){
         Drgb_buffer[i].resize(N);
         for (int j = 0; j < static_cast<int>(Drgb_buffer[i].size()); j++) Drgb_buffer[i][j].resize(bufSize);
-    }
+    }*/
 
     std::vector<float> xx, yy;
-    for (int i = 0; (pz * i) < colT; i++){
+    for (int i = 0; (pz * i) < T.cols; i++){
         float n = pz * i * 3.0039;
-        for (int j = 0; (pz * j) < rowT; j++){
+        for (int j = 0; (pz * j) < T.rows; j++){
             float m = pz * j * 0.0039;
             xx.push_back(n);
             yy.push_back(m);
         }
     }
-
-    for (int j = 0; j < static_cast<int>(xx.size()); j++){
+    std::cout << "(debug)size of xx: " << xx.size() << std::endl;
+    //std::cout << "--- xx: " << xx << std::endl;
+    //std::cout << "--- yy: " << yy << std::endl;
+    
+    for (int j = 0; j < static_cast<int>(yy.size()); j++){
         for (int i = 0; i < static_cast<int>(xx.size()); i++){
-            Dxy[i][j] = pow((xx[i] - xx[j]), 2) + pow((yy[i] - yy[j]), 2);
+            Dxy[j][i] = pow((xx[i] - xx[j]), 2) + pow((yy[i] - yy[j]), 2);
         }
     }
+    //std::cout << "--- Dxy: " << Dxy << std::endl;
 
-    std::vector<std::vector<int>> IndMat;
-    IndMat.resize(I.rows / pz); // 90
-    for (int i = 0; i < static_cast<int>(IndMat.size()); i++) IndMat[i].resize(I.cols / pz); // 160
+    std::vector<std::vector<int>> IndMat(I.rows / pz, std::vector<int>(I.cols / pz));
+    //IndMat.resize(I.rows / pz); // 90
+    //for (int i = 0; i < static_cast<int>(IndMat.size()); i++) IndMat[i].resize(I.cols / pz); // 160
 
     int n = 0;
     for (int j = 0; j < (I.cols / pz); j++){
@@ -196,31 +197,26 @@ int main(int argc, char *argv[]){
         }
     }
 
-    // loop over image pixels
-    std::cout << "log : " << colI << " " << rowI << std::endl;
-    std::cout << "log : " << colT << " " << rowT << std::endl;
 
-    std::chrono::system_clock::time_point start1, end1;
-    start1 = std::chrono::system_clock::now();
+
+    //std::chrono::system_clock::time_point start, end;
+    //start = std::chrono::system_clock::now();
 
     //#pragma omp parallel for
-    for (int coli = 0; coli < (colI / pz - colT / pz + 1); coli++){ // 154
-        for (int rowi = 0; rowi < (rowI / pz - rowT / pz + 1); rowi++){ // 76
-            cv::Mat PMat(9, N, CV_32FC3);
+    
+    for (int coli = 0; coli < (I.cols / pz - T.cols / pz + 1); coli++){ // 154
+        for (int rowi = 0; rowi < (I.rows / pz - T.rows / pz + 1); rowi++){ // 76
+            cv::Mat PMat(9, TMat.cols, CV_32FC3);
             std::vector<int> v;
             std::vector<float> w;
-            for (int j = coli; j < (coli + colT / pz); j++)
-            {
-                for (int i = rowi; i < (rowi + rowT / pz); i++)
-                {
+            for (int j = coli; j < (coli + T.cols / pz); j++){
+                for (int i = rowi; i < (rowi + T.rows / pz); i++){
                     v.push_back(IndMat[i][j]);
                 }
             }
             int ptv = 0;
-            for (int ix = 0; ix < N; ix++)
-            {
-                for (int jx = 0; jx < 9; jx++)
-                {
+            for (int ix = 0; ix < N; ix++){
+                for (int jx = 0; jx < 9; jx++){
                     PMat.at<cv::Vec3f>(jx, ix)[0] = IMat.at<cv::Vec3f>(jx, v[ptv])[0];
                     PMat.at<cv::Vec3f>(jx, ix)[1] = IMat.at<cv::Vec3f>(jx, v[ptv])[1];
                     PMat.at<cv::Vec3f>(jx, ix)[2] = IMat.at<cv::Vec3f>(jx, v[ptv])[2];
@@ -229,23 +225,18 @@ int main(int argc, char *argv[]){
             }
 
             //compute distance matrix
-            for (int idxP = 0; idxP < N; idxP++)
-            {
+            for (int idxP = 0; idxP < N; idxP++){
                 cv::Mat Temp(9, N, CV_32FC3);
-                for (int i = 0; i < Temp.cols; i++)
-                {
-                    for (int j = 0; j < Temp.rows; j++)
-                    {
+                for (int i = 0; i < Temp.cols; i++){
+                    for (int j = 0; j < Temp.rows; j++){
                         Temp.at<cv::Vec3f>(j, i)[0] = pow(((-TMat.at<cv::Vec3f>(j, i)[0] + PMat.at<cv::Vec3f>(j, idxP)[0])*Gaussian[j]), 2);
                         Temp.at<cv::Vec3f>(j, i)[1] = pow(((-TMat.at<cv::Vec3f>(j, i)[1] + PMat.at<cv::Vec3f>(j, idxP)[1])*Gaussian[j]), 2);
                         Temp.at<cv::Vec3f>(j, i)[2] = pow(((-TMat.at<cv::Vec3f>(j, i)[2] + PMat.at<cv::Vec3f>(j, idxP)[2])*Gaussian[j]), 2);
                     }
                 }
-                for (int jx = 0; jx < N; jx++)
-                {
+                for (int jx = 0; jx < N; jx++){
                     float res = 0;
-                    for (int ix = 0; ix < 9; ix++)
-                    {
+                    for (int ix = 0; ix < 9; ix++){
                         if (D[ix][jx] < 1e-4) D[ix][jx] = 0;
                         res += Temp.at<cv::Vec3f>(ix, idxP)[0];
                         res += Temp.at<cv::Vec3f>(ix, idxP)[1];
@@ -256,10 +247,8 @@ int main(int argc, char *argv[]){
             }
 
             //make the reversed matrix of distance matrix
-            for (int ix = 0; ix < N; ix++)
-            {
-                for (int jx = 0; jx < N; jx++)
-                {
+            for (int ix = 0; ix < N; ix++){
+                for (int jx = 0; jx < N; jx++){
                     //calculate distance
                     D[ix][jx] = Dxy[ix][jx] * gamma_ + Drgb[ix][jx];
                     if (D[ix][jx] < 1e-4) D[ix][jx] = 0;
@@ -271,16 +260,14 @@ int main(int argc, char *argv[]){
             std::vector<float> minVal1, minVal2;
             std::vector<int> idx1, idx2, ii1, ii2;
 
-            for (int ix = 0; ix < N; ix++)
-            {
+            for (int ix = 0; ix < N; ix++){
                 auto min1 = min_element(begin(D[ix]), end(D[ix]));
                 minVal1.push_back(*min1);
                 idx1.push_back(distance(begin(D[ix]), min1));
 
                 ii1.push_back((ix * N) + idx1[ix]);
             }
-            for (int ix = 0; ix < N; ix++)
-            {
+            for (int ix = 0; ix < N; ix++){
                 auto min2 = min_element(begin(D_r[ix]), end(D_r[ix]));
                 minVal2.push_back(*min2);
                 idx2.push_back(distance(begin(D_r[ix]), min2));
@@ -290,26 +277,21 @@ int main(int argc, char *argv[]){
             std::vector<std::vector<int>> IDX_MAT1, IDX_MAT2;
             IDX_MAT1.resize(N);
             IDX_MAT2.resize(N);
-            for (int i = 0; i < N; i++)
-            {
+            for (int i = 0; i < N; i++){
                 IDX_MAT1[i].resize(N);
                 IDX_MAT2[i].resize(N);
             }
             int sum, sum2, pt1, pt2;
             sum = sum2 = pt1 = pt2 = 0;
-            for (int ix = 0; ix < N; ix++)
-            {
-                for (int jx = 0; jx < N; jx++)
-                {
+            for (int ix = 0; ix < N; ix++){
+                for (int jx = 0; jx < N; jx++){
                     IDX_MAT1[ix][jx] = 0;
                     IDX_MAT2[ix][jx] = 999;
-                    if ((pt1 < N) && ((ix * N + jx) == ii1[pt1]))
-                    {
+                    if ((pt1 < N) && ((ix * N + jx) == ii1[pt1])){
                         IDX_MAT1[ix][jx] = 1;
                         pt1++;
                     }
-                    if ((pt2 < N) && ((jx * N + ix) == ii2[pt2]))
-                    {
+                    if ((pt2 < N) && ((jx * N + ix) == ii2[pt2])){
                         IDX_MAT2[ix][jx] = 1;
                         pt2++;
                     }
@@ -322,17 +304,17 @@ int main(int argc, char *argv[]){
         }
     }
 
-    end1 = std::chrono::system_clock::now();
-    const double time = std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1).count() *0.001;
-    std::cout << "time " << time << " [msec]" << std::endl;
+    //end = std::chrono::system_clock::now();
+    //const double time = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() *0.001;
+    //std::cout << "Time: " << time << " [msec]" << std::endl;
 
     float max = BBS[0][0];
     int markRow, markCol;
     markCol = markRow = 0;
 
     // search max score
-    for (int i = 0; i < rowI; i++){
-        for (int j = 0; j < colI; j++){
+    for (int i = 0; i < I.rows; i++){
+        for (int j = 0; j < I.cols; j++){
             if (BBS[i][j] >= max){
                 max = BBS[i][j];
                 markRow = i;
@@ -453,6 +435,6 @@ int main(int argc, char *argv[]){
     hconcat(OUTPUT1, OUTPUT2, OUTPUT3);
     std::cout << resultName << std::endl << std::endl;
     imwrite(resultName, OUTPUT3);
-
+    
     return 0;
 }
